@@ -1,14 +1,8 @@
-# --- PyTorch & Audio ---
 torch>=2.0.0
 torchaudio>=2.0.0
 torchvision>=0.15.0
-
-# --- Model Architectures ---
-transformers>=4.30.0    # Required for ViTConfig and ViTEncoder
-
-# --- Data Visualization & EDA ---
+transformers>=4.30.0
 matplotlib>=3.7.0
 numpy>=1.24.0
-
-# --- Training & Logging ---
-tensorboard>=2.13.0     # Required for SummaryWriter in train.py
+scikit-learn>=1.2.0
+seaborn>=0.12.0

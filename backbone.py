@@ -5,6 +5,25 @@ from transformers import ViTConfig
 from transformers.models.vit.modeling_vit import ViTEncoder
 
 
+def get_2d_sincos_pos_embed(embed_dim, grid_h, grid_w, device):
+    grid_h_arr = torch.arange(grid_h, dtype=torch.float32, device=device)
+    grid_w_arr = torch.arange(grid_w, dtype=torch.float32, device=device)
+    grid = torch.meshgrid(grid_w_arr, grid_h_arr, indexing="ij")
+    grid = torch.stack(grid, dim=0)
+
+    omega = torch.arange(embed_dim // 4, dtype=torch.float32, device=device)
+    omega = 1.0 / (10000.0 ** (omega / (embed_dim / 4.0)))
+
+    out_w = torch.einsum("m,d->md", grid[0].flatten(), omega)
+    out_h = torch.einsum("m,d->md", grid[1].flatten(), omega)
+
+    pos_w = torch.cat([torch.sin(out_w), torch.cos(out_w)], dim=1)
+    pos_h = torch.cat([torch.sin(out_h), torch.cos(out_h)], dim=1)
+
+    pos_embed = torch.cat([pos_h, pos_w], dim=1)
+    return pos_embed.unsqueeze(0)
+
+
 class SwiGLU(nn.Module):
     def __init__(self, in_features, hidden_features):
         super().__init__()
@@ -35,38 +54,40 @@ class MacaronTransformerBlock(nn.Module):
 
 
 class NormalViTBackbone(nn.Module):
-    """Standard ViT-Tiny via HuggingFace. Shared baseline for MAE, JEPA, and DINO."""
-    def __init__(self, img_size=(80, 101), patch_size=(16, 16), in_chans=1,
-                 embed_dim=192, depth=12, num_heads=3):
+    def __init__(self, patch_size=(16, 16), in_chans=1, embed_dim=192, depth=12, num_heads=3):
         super().__init__()
+        self.patch_size = patch_size
+        self.embed_dim = embed_dim
         self.patch_embed = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
-        self.num_patches = (img_size[0] // patch_size[0]) * (img_size[1] // patch_size[1])
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, embed_dim))
         config = ViTConfig(
             hidden_size=embed_dim,
             num_hidden_layers=depth,
             num_attention_heads=num_heads,
-            intermediate_size=embed_dim * 4,
+            intermediate_size=embed_dim * 12,
             hidden_act="gelu",
         )
         self.encoder = ViTEncoder(config)
         self.norm = nn.LayerNorm(embed_dim)
 
     def forward(self, x):
+        B, C, H, W = x.shape
+        grid_f = H // self.patch_size[0]
+        grid_t = W // self.patch_size[1]
+
         x = self.patch_embed(x).flatten(2).transpose(1, 2)
-        x = x + self.pos_embed
+        pos_embed = get_2d_sincos_pos_embed(self.embed_dim, grid_f, grid_t, x.device)
+        x = x + pos_embed
+
         x = self.encoder(x, output_attentions=False, return_dict=False)[0]
         return self.norm(x)
 
 
 class SOTAViTBackbone(nn.Module):
-    """AudioMAE++ backbone: Macaron-style blocks with SwiGLU FFNs."""
-    def __init__(self, img_size=(80, 101), patch_size=(16, 16), in_chans=1,
-                 embed_dim=192, depth=12, num_heads=3):
+    def __init__(self, patch_size=(16, 16), in_chans=1, embed_dim=192, depth=12, num_heads=3):
         super().__init__()
+        self.patch_size = patch_size
+        self.embed_dim = embed_dim
         self.patch_embed = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
-        self.num_patches = (img_size[0] // patch_size[0]) * (img_size[1] // patch_size[1])
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, embed_dim))
         self.blocks = nn.ModuleList([
             MacaronTransformerBlock(embed_dim, num_heads, hidden_dim=embed_dim * 4)
             for _ in range(depth)
@@ -74,15 +95,14 @@ class SOTAViTBackbone(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
 
     def forward(self, x):
+        B, C, H, W = x.shape
+        grid_f = H // self.patch_size[0]
+        grid_t = W // self.patch_size[1]
+
         x = self.patch_embed(x).flatten(2).transpose(1, 2)
-        x = x + self.pos_embed
+        pos_embed = get_2d_sincos_pos_embed(self.embed_dim, grid_f, grid_t, x.device)
+        x = x + pos_embed
+
         for block in self.blocks:
             x = block(x)
         return self.norm(x)
-
-
-if __name__ == "__main__":
-    dummy = torch.randn(4, 1, 80, 101)
-    for cls in (NormalViTBackbone, SOTAViTBackbone):
-        out = cls()(dummy)
-        print(f"{cls.__name__}: {out.shape}")

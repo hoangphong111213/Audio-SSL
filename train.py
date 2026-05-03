@@ -1,18 +1,18 @@
 import os
 import math
+import json
 import argparse
 import torch
 import torch.optim as optim
-from torch.utils.data import DataLoader, Subset
-from torch.utils.tensorboard import SummaryWriter
-from dataset import GSCv2MelDataset
+import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader, random_split
+from dataset import LibriSpeechMelDataset
 from mae import AudioMAE
 from jepa import AudioJEPA
-from dino import AudioDINO
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_float32_matmul_precision('high')
+DEVICE = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 JEPA_MIN_STD = 0.01
-DINO_MIN_ENTROPY = 0.50
 
 
 def cosine_lr(optimizer, epoch, total_epochs, warmup_epochs, base_lr, min_lr=1e-6):
@@ -46,9 +46,6 @@ def run_epoch(model, loader, model_type, optimizer=None, momentum=None):
             elif model_type == "jepa":
                 loss, std = model(mels)
                 aux = std
-            else:
-                loss, entropy = model(mels)
-                aux = entropy
 
             if is_train:
                 optimizer.zero_grad()
@@ -66,8 +63,6 @@ def run_epoch(model, loader, model_type, optimizer=None, momentum=None):
                 msg = f"  step {step:4d}  loss {loss.item():.4f}"
                 if model_type == "jepa":
                     msg += f"  std {aux:.4f}"
-                elif model_type == "dino":
-                    msg += f"  entropy {aux:.4f}"
                 print(msg)
 
     n = len(loader)
@@ -75,19 +70,25 @@ def run_epoch(model, loader, model_type, optimizer=None, momentum=None):
 
 
 def main(args):
-    print(f"Device: {DEVICE} | Model: {args.model.upper()}")
+    print(f"Device: {DEVICE} | Model: {args.model.upper()} | Dataset: LibriSpeech")
+    os.makedirs(args.data_dir, exist_ok=True)
+    os.makedirs(f"logs/{args.model}", exist_ok=True)
+    os.makedirs(f"checkpoints/{args.model}", exist_ok=True)
 
-    full_train = GSCv2MelDataset(root=args.data_dir, download=True, is_training=True)
-    full_val = GSCv2MelDataset(root=args.data_dir, download=False, is_training=False)
-    n_val = int(0.1 * len(full_train))
-    idx = torch.randperm(len(full_train), generator=torch.Generator().manual_seed(42)).tolist()
+    full_dataset = LibriSpeechMelDataset(root=args.data_dir, url="train-clean-100", download=True, is_training=True)
+    
+    train_size = int(0.9 * len(full_dataset))
+    val_size = len(full_dataset) - train_size
+    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
+
+    val_dataset.dataset.is_training = False
 
     train_loader = DataLoader(
-        Subset(full_train, idx[n_val:]), batch_size=args.batch_size, shuffle=True,
+        train_dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, pin_memory=True, drop_last=True,
     )
     val_loader = DataLoader(
-        Subset(full_val, idx[:n_val]), batch_size=args.batch_size, shuffle=False,
+        val_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=True,
     )
 
@@ -98,8 +99,10 @@ def main(args):
     elif args.model == "jepa":
         model = AudioJEPA()
     else:
-        model = AudioDINO()
+        raise ValueError("Unsupported model.")
+        
     model = model.to(DEVICE)
+    model = torch.compile(model)
     print(f"Params: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
     decay, no_decay = [], []
@@ -112,21 +115,26 @@ def main(args):
         lr=args.lr, betas=(0.9, 0.95),
     )
 
-    writer = SummaryWriter(log_dir=f"runs/{args.model}")
     best_loss = float("inf")
     start_epoch = 0
+    history = {
+        "epoch": [], "train_loss": [], "val_loss": [],
+        "lr": [], "ema_momentum": [], "train_aux": [], "val_aux": []
+    }
 
     if args.resume and os.path.isfile(args.resume):
         ckpt = torch.load(args.resume, map_location="cpu")
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         start_epoch, best_loss = ckpt["epoch"] + 1, ckpt["best_loss"]
+        if "history" in ckpt:
+            history = ckpt["history"]
         print(f"Resumed from {args.resume} (epoch {start_epoch})")
 
     for epoch in range(start_epoch, args.epochs):
         lr = cosine_lr(optimizer, epoch, args.epochs, args.warmup_epochs, args.lr)
         momentum = ema_momentum(epoch, args.epochs)
-        print(f"\nEpoch {epoch:3d}  lr {lr:.2e}  ema {momentum:.4f}")
+        print(f"\nEpoch {epoch:3d}  lr {lr:.2e}" + (f"  ema {momentum:.4f}" if args.model == "jepa" else ""))
 
         train = run_epoch(model, train_loader, args.model, optimizer, momentum)
         val = run_epoch(model, val_loader, args.model)
@@ -136,44 +144,48 @@ def main(args):
             summary += f"  val_std {val['aux']:.4f}"
             if val["aux"] < JEPA_MIN_STD:
                 summary += "  !! COLLAPSE"
-        elif args.model == "dino":
-            summary += f"  val_entropy {val['aux']:.4f}"
-            if val["aux"] < DINO_MIN_ENTROPY:
-                summary += "  !! COLLAPSE"
         print(summary)
 
-        writer.add_scalars("Loss", {"train": train["loss"], "val": val["loss"]}, epoch)
-        writer.add_scalar("LR", lr, epoch)
-        writer.add_scalar("EMA_momentum", momentum, epoch)
+        history["epoch"].append(epoch)
+        history["train_loss"].append(train["loss"])
+        history["val_loss"].append(val["loss"])
+        history["lr"].append(lr)
         if args.model == "jepa":
-            writer.add_scalars("JEPA_std", {"train": train["aux"], "val": val["aux"]}, epoch)
-        elif args.model == "dino":
-            writer.add_scalars("DINO_entropy", {"train": train["aux"], "val": val["aux"]}, epoch)
+            history["ema_momentum"].append(momentum)
+            history["train_aux"].append(train["aux"])
+            history["val_aux"].append(val["aux"])
 
-        state = {"epoch": epoch, "model": model.state_dict(),
-                 "optimizer": optimizer.state_dict(), "best_loss": best_loss}
-        os.makedirs("checkpoints", exist_ok=True)
-        torch.save(state, f"checkpoints/{args.model}_epoch_{epoch:03d}.pt")
+        with open(f"logs/{args.model}/history.json", "w") as f:
+            json.dump(history, f, indent=4)
+
+        state = {
+            "epoch": epoch,
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "best_loss": best_loss,
+            "history": history,
+        }
+        
+        torch.save(state, f"checkpoints/{args.model}/last.pt")
+
         if val["loss"] < best_loss:
             best_loss = val["loss"]
-            torch.save(state, f"checkpoints/{args.model}_best.pt")
+            state["best_loss"] = best_loss
+            torch.save(state, f"checkpoints/{args.model}/best.pt")
             print(f"  ** Best saved ({best_loss:.4f})")
 
-    writer.close()
     print(f"\nDone. Best val_loss: {best_loss:.4f}")
-
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--model", type=str, default="mae", choices=["mae", "mae_sota", "jepa", "dino"])
+    p.add_argument("--model", type=str, default="mae", choices=["mae", "mae_sota", "jepa"])
     p.add_argument("--data_dir", type=str, default="./data")
-    p.add_argument("--batch_size", type=int, default=256)
-    p.add_argument("--num_workers", type=int, default=4)
-    p.add_argument("--epochs", type=int, default=100)
+    p.add_argument("--batch_size", type=int, default=1024)
+    p.add_argument("--num_workers", type=int, default=16)
+    p.add_argument("--epochs", type=int, default=200)
     p.add_argument("--warmup_epochs", type=int, default=10)
-    p.add_argument("--lr", type=float, default=1.5e-4)
+    p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--weight_decay", type=float, default=0.05)
     p.add_argument("--resume", type=str, default=None)
     args = p.parse_args()
-    args.lr = args.lr * args.batch_size / 256
     main(args)
