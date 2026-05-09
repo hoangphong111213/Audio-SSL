@@ -21,45 +21,39 @@ class MaskingUtility:
 
         return mask, ids_keep, ids_restore
 
-    def generate_block_mask(self, x, min_aspect=0.3, max_aspect=3.0):
+    def generate_jepa_block_mask(self, x, grid_h, grid_w,
+                                 min_t=4, max_t=8, min_f=2, max_f=4,
+                                 n_target_blocks=4, context_mask_ratio=0.15):
         B, N, _ = x.shape
         device = x.device
-        grid_h, grid_w = self._infer_grid(N)
-        target_n_mask = int(N * self.mask_ratio)
+        F, T = grid_h, grid_w
 
-        all_masks, all_ids_keep, all_ids_restore = [], [], []
-
+        target_mask = torch.zeros(B, F, T, dtype=torch.bool, device=device)
         for b in range(B):
-            for _ in range(10): 
-                aspect  = math.exp(torch.empty(1).uniform_(math.log(min_aspect), math.log(max_aspect)).item())
-                block_h = max(1, min(int(round(math.sqrt(target_n_mask * aspect))), grid_h))
-                block_w = max(1, min(int(round(math.sqrt(target_n_mask / aspect))), grid_w))
-                top  = torch.randint(0, grid_h - block_h + 1, (1,)).item()
-                left = torch.randint(0, grid_w - block_w + 1, (1,)).item()
-                mask_2d = torch.zeros(grid_h, grid_w, device=device)
-                mask_2d[top:top + block_h, left:left + block_w] = 1
-                if mask_2d.sum() > 0:
-                    break
+            for _ in range(n_target_blocks):
+                bh = torch.randint(min_f, max_f + 1, (1,), device=device).item()
+                bw = torch.randint(min_t, max_t + 1, (1,), device=device).item()
+                f0 = torch.randint(0, max(1, F - bh + 1), (1,), device=device).item()
+                t0 = torch.randint(0, max(1, T - bw + 1), (1,), device=device).item()
+                target_mask[b, f0:f0 + bh, t0:t0 + bw] = True
 
-            mask_1d    = mask_2d.flatten()
-            kept_ids   = (mask_1d == 0).nonzero(as_tuple=False).squeeze(1)
-            masked_ids = (mask_1d == 1).nonzero(as_tuple=False).squeeze(1)
-            kept_ids   = kept_ids[torch.randperm(len(kept_ids), device=device)]
-            masked_ids = masked_ids[torch.randperm(len(masked_ids), device=device)]
+        target_flat = target_mask.view(B, N)
 
-            ids_shuffle = torch.cat([kept_ids, masked_ids])
-            ids_restore = torch.argsort(ids_shuffle)
+        rand = torch.rand(B, N, device=device).masked_fill(target_flat, 1.0)
+        context_visible = ~target_flat & (rand >= context_mask_ratio)
 
-            all_masks.append(mask_1d)
-            all_ids_keep.append(kept_ids)
-            all_ids_restore.append(ids_restore)
+        ids_sorted  = torch.argsort((~context_visible).long(), dim=1, stable=True)
+        ids_restore = torch.argsort(ids_sorted, dim=1)
+        N_keep      = int(context_visible.sum(dim=1).min().item())
+        ids_keep    = ids_sorted[:, :N_keep]
 
-        min_keep    = min(t.shape[0] for t in all_ids_keep)
-        mask        = torch.stack(all_masks)
-        ids_keep    = torch.stack([t[:min_keep] for t in all_ids_keep])
-        ids_restore = torch.stack(all_ids_restore)
+        target_ids_list = [target_flat[b].nonzero(as_tuple=False).squeeze(-1) for b in range(B)]
+        max_tgt    = max(t.numel() for t in target_ids_list)
+        target_ids = torch.stack([
+            torch.cat([t, t[-1:].expand(max_tgt - t.numel())]) for t in target_ids_list
+        ])
 
-        return mask, ids_keep, ids_restore
+        return ids_keep, ids_restore, target_ids
 
     def generate_2d_mask(self, x, T, F, mask_t_prob=0.6, mask_f_prob=0.5):
         B, N, D = x.shape

@@ -6,15 +6,11 @@ from mask_utils import MaskingUtility
 
 
 class AudioJEPA(nn.Module):
-    def __init__(self, embed_dim=192, predictor_embed_dim=96, predictor_depth=4, 
-                 mask_t_prob=0.5, mask_f_prob=0.4, patch_size=(16, 16)):
+    def __init__(self, embed_dim=192, predictor_embed_dim=192, predictor_depth=4, patch_size=(16, 16)):
         super().__init__()
         self.embed_dim = embed_dim
         self.predictor_embed_dim = predictor_embed_dim
         self.patch_size = patch_size
-        
-        self.mask_t_prob = mask_t_prob
-        self.mask_f_prob = mask_f_prob
 
         self.context_encoder = NormalViTBackbone(patch_size=patch_size, embed_dim=embed_dim)
         self.target_encoder = NormalViTBackbone(patch_size=patch_size, embed_dim=embed_dim)
@@ -24,8 +20,12 @@ class AudioJEPA(nn.Module):
         self.target_encoder.load_state_dict(self.context_encoder.state_dict())
 
         self.masker = MaskingUtility()
-        
+
         self.predictor_embed = nn.Linear(embed_dim, predictor_embed_dim)
+        # Separate projection for positional embeddings into predictor space.
+        # Cannot reuse predictor_embed: that layer is trained on encoder semantic
+        # outputs and its gradients are incompatible with raw sinusoidal inputs.
+        self.predictor_pos_embed_proj = nn.Linear(embed_dim, predictor_embed_dim)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, predictor_embed_dim))
 
         predictor_layer = nn.TransformerEncoderLayer(
@@ -40,7 +40,7 @@ class AudioJEPA(nn.Module):
     @torch.compiler.disable
     def _encode(self, encoder, x):
         if hasattr(encoder, 'encoder'):
-            return encoder.norm(encoder.encoder(x)[0])
+            return encoder.norm(encoder.encoder(x, output_attentions=False, return_dict=False)[0])
         for block in encoder.blocks:
             x = block(x)
         return encoder.norm(x)
@@ -48,60 +48,57 @@ class AudioJEPA(nn.Module):
     @torch.no_grad()
     def update_target_encoder(self, momentum=0.996):
         for p_c, p_t in zip(self.context_encoder.parameters(), self.target_encoder.parameters()):
-            p_t.data.mul_(momentum).add_(p_c.data, alpha=1.0 - momentum)
+            p_t.lerp_(p_c, 1.0 - momentum)
 
     def forward(self, x):
         B, D = x.shape[0], self.embed_dim
         _, _, H, W = x.shape
-        
+
         pad_w = (self.patch_size[1] - W % self.patch_size[1]) % self.patch_size[1]
         x = F.pad(x, (0, pad_w))
-        
+
         grid_F = x.shape[2] // self.patch_size[0]
         grid_T = x.shape[3] // self.patch_size[1]
         pos_embed = get_2d_sincos_pos_embed(self.embed_dim, grid_F, grid_T, x.device)
 
         with torch.no_grad():
-            x_tgt = self.target_encoder.patch_embed(x).flatten(2).transpose(1, 2)
-            x_tgt = x_tgt + pos_embed
+            x_tgt = self.target_encoder.patch_embed(x).flatten(2).transpose(1, 2) + pos_embed
             target_feats = self._encode(self.target_encoder, x_tgt)
             target_feats = F.layer_norm(target_feats, (target_feats.size(-1),))
 
-        x_ctx = self.context_encoder.patch_embed(x).flatten(2).transpose(1, 2)
-        x_ctx = x_ctx + pos_embed
-        
-        mask, ids_keep, ids_restore = self.masker.generate_2d_mask(
-            x_ctx, T=grid_T, F=grid_F, 
-            mask_t_prob=self.mask_t_prob, mask_f_prob=self.mask_f_prob
+        x_ctx = self.context_encoder.patch_embed(x).flatten(2).transpose(1, 2) + pos_embed
+
+        ids_keep, ids_restore, target_ids = self.masker.generate_jepa_block_mask(
+            x_ctx, grid_h=grid_F, grid_w=grid_T
         )
-        x_visible = self.masker.apply_mask_to_sequence(x_ctx, ids_keep)
-        context_feats = self._encode(self.context_encoder, x_visible)
+
+        context_feats = self._encode(self.context_encoder,
+                                     self.masker.apply_mask_to_sequence(x_ctx, ids_keep))
 
         N_keep = ids_keep.shape[1]
-        N_mask = x_ctx.shape[1] - N_keep
-        masked_ids = torch.argsort(ids_restore, dim=1)[:, N_keep:]
-        
+        N_target = target_ids.shape[1]
+
         target_pos_emb = torch.gather(
-            pos_embed.expand(B, -1, -1),
-            dim=1, index=masked_ids.unsqueeze(-1).expand(-1, -1, D)
+            pos_embed.expand(B, -1, -1), dim=1,
+            index=target_ids.unsqueeze(-1).expand(-1, -1, D)
         )
 
         context_feats_pred = self.predictor_embed(context_feats)
-        target_pos_emb_pred = self.predictor_embed(target_pos_emb)
-        
-        mask_tokens = self.mask_token.expand(B, N_mask, self.predictor_embed_dim).clone() + target_pos_emb_pred
-        
-        pred_sequence = torch.cat([context_feats_pred, mask_tokens], dim=1)
-        predictions = self.predictor_norm(self.predictor_blocks(pred_sequence))
-        
-        predictions = predictions[:, N_keep:, :]
-        predictions = self.predictor_proj(predictions)
+        mask_tokens = (
+            self.mask_token.expand(B, N_target, self.predictor_embed_dim).clone()
+            + self.predictor_pos_embed_proj(target_pos_emb)
+        )
+
+        predictions = self.predictor_norm(
+            self.predictor_blocks(torch.cat([context_feats_pred, mask_tokens], dim=1))
+        )
+        predictions = self.predictor_proj(predictions[:, N_keep:])
 
         target_masked = torch.gather(
             target_feats, dim=1,
-            index=masked_ids.unsqueeze(-1).expand(-1, -1, D)
+            index=target_ids.unsqueeze(-1).expand(-1, -1, D)
         )
-        
+
         loss = F.smooth_l1_loss(predictions, target_masked, beta=1.0)
         std = target_feats.var(dim=0).mean().sqrt().item()
 

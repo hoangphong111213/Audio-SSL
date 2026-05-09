@@ -1,3 +1,14 @@
+"""
+train_ls.py  —  SSL pre-training on LibriSpeech ONLY (no GSC).
+Outputs go to  checkpoints/<model>_ls/  and  logs/<model>_ls/
+so they never collide with the original mixed-data runs.
+
+Usage:
+    python train_ls.py --model mae      # → mae_ls
+    python train_ls.py --model jepa     # → jepa_ls
+    python train_ls.py --model mae_sota # → mae_sota_ls
+"""
+
 import os
 import math
 import json
@@ -17,8 +28,12 @@ DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 JEPA_MIN_STD = 0.01
 
 freq_masking = T.FrequencyMasking(freq_mask_param=15)
-time_masking = T.TimeMasking(time_mask_param=35)
+time_masking  = T.TimeMasking(time_mask_param=35)
 
+
+# ---------------------------------------------------------------------------
+# Helpers (identical to train.py)
+# ---------------------------------------------------------------------------
 
 def cosine_lr(optimizer, epoch, total_epochs, warmup_epochs, base_lr, min_lr=1e-6):
     if epoch < warmup_epochs:
@@ -40,8 +55,8 @@ def run_epoch(model, loader, model_type, optimizer=None, momentum=None, augment=
     model.train() if optimizer is not None else model.eval()
 
     total_loss = 0.0
-    total_aux = 0.0
-    has_aux = False
+    total_aux  = 0.0
+    has_aux    = False
 
     with torch.set_grad_enabled(optimizer is not None):
         for step, (mels, _) in enumerate(loader):
@@ -85,15 +100,19 @@ def run_epoch(model, loader, model_type, optimizer=None, momentum=None, augment=
     n = len(loader)
     return {
         "loss": total_loss / n,
-        "aux": (total_aux / n) if has_aux else None,
+        "aux":  (total_aux / n) if has_aux else None,
     }
 
 
+# ---------------------------------------------------------------------------
+# LS-ONLY dataset builder  (key difference from train.py)
+# ---------------------------------------------------------------------------
+
 def build_ssl_datasets(args):
+    """Pre-train on LibriSpeech only — GSC is held out for domain-shift probing."""
     full = ConcatDataset([
         CachedMelDataset(os.path.join(args.data_dir, "mel_cache", "ls100")),
         CachedMelDataset(os.path.join(args.data_dir, "mel_cache", "ls360")),
-        CachedMelDataset(os.path.join(args.data_dir, "mel_cache", "gsc")),
     ])
 
     g = torch.Generator().manual_seed(42)
@@ -116,13 +135,17 @@ def build_loader(dataset, args, shuffle):
     )
 
 
-def save_plots(history, model_name):
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
+def save_plots(history, run_name):
     is_jepa = len(history["val_aux"]) > 0
     ncols = 3 if is_jepa else 2
     fig, axes = plt.subplots(1, ncols, figsize=(5 * ncols, 4))
 
     axes[0].plot(history["epoch"], history["train_loss"], label="Train")
-    axes[0].plot(history["epoch"], history["val_loss"], label="Val")
+    axes[0].plot(history["epoch"], history["val_loss"],   label="Val")
     axes[0].set_title("Loss")
     axes[0].set_xlabel("Epoch")
     axes[0].legend()
@@ -133,28 +156,35 @@ def save_plots(history, model_name):
 
     if is_jepa:
         axes[2].plot(history["epoch"], history["train_aux"], label="Train std")
-        axes[2].plot(history["epoch"], history["val_aux"], label="Val std")
+        axes[2].plot(history["epoch"], history["val_aux"],   label="Val std")
         axes[2].axhline(JEPA_MIN_STD, color="red", linestyle="--", linewidth=0.8, label="Collapse threshold")
         axes[2].set_title("JEPA Predictor Std")
         axes[2].set_xlabel("Epoch")
         axes[2].legend()
 
     plt.tight_layout()
-    path = f"logs/{model_name}/training_plots.png"
+    path = f"logs/{run_name}/training_plots.png"
     plt.savefig(path, dpi=150)
     plt.close()
     print(f"Saved plots to {path}")
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main(args):
-    print(f"Device: {DEVICE} | Model: {args.model.upper()} | Dataset: LS100 + LS360 + GSCUnlabeled")
-    os.makedirs(args.data_dir, exist_ok=True)
-    os.makedirs(f"logs/{args.model}", exist_ok=True)
-    os.makedirs(f"checkpoints/{args.model}", exist_ok=True)
+    # Append '_ls' suffix so all outputs are isolated from original runs
+    run_name = f"{args.model}_ls"
+
+    print(f"Device: {DEVICE} | Model: {run_name.upper()} | Dataset: LS100 + LS360 (no GSC)")
+    os.makedirs(args.data_dir,           exist_ok=True)
+    os.makedirs(f"logs/{run_name}",      exist_ok=True)
+    os.makedirs(f"checkpoints/{run_name}", exist_ok=True)
 
     train_dataset, val_dataset = build_ssl_datasets(args)
     train_loader = build_loader(train_dataset, args, shuffle=True)
-    val_loader = build_loader(val_dataset, args, shuffle=False)
+    val_loader   = build_loader(val_dataset,   args, shuffle=False)
 
     if args.model == "mae":
         model = AudioMAE(use_sota_backbone=False)
@@ -176,17 +206,17 @@ def main(args):
             (no_decay if p.ndim == 1 or name.endswith(".bias") else decay).append(p)
 
     optimizer = optim.AdamW(
-        [{"params": decay, "weight_decay": args.weight_decay},
+        [{"params": decay,    "weight_decay": args.weight_decay},
          {"params": no_decay, "weight_decay": 0.0}],
         lr=args.lr,
         betas=(0.9, 0.95),
     )
 
-    best_loss = float("inf")
+    best_loss  = float("inf")
     start_epoch = 0
     history = {
         "epoch": [], "train_loss": [], "val_loss": [], "lr": [],
-        "ema_momentum": [], "train_aux": [], "val_aux": []
+        "ema_momentum": [], "train_aux": [], "val_aux": [],
     }
 
     if args.resume and os.path.isfile(args.resume):
@@ -194,18 +224,19 @@ def main(args):
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         start_epoch = ckpt["epoch"] + 1
-        best_loss = ckpt["best_loss"]
+        best_loss   = ckpt["best_loss"]
         if "history" in ckpt:
             history = ckpt["history"]
         print(f"Resumed from {args.resume} (epoch {start_epoch})")
 
     for epoch in range(start_epoch, args.epochs):
-        lr = cosine_lr(optimizer, epoch, args.epochs, args.warmup_epochs, args.lr)
+        lr       = cosine_lr(optimizer, epoch, args.epochs, args.warmup_epochs, args.lr)
         momentum = ema_momentum(epoch, args.epochs)
-        print(f"\nEpoch {epoch:3d}  lr {lr:.2e}" + (f"  ema {momentum:.4f}" if args.model == "jepa" else ""))
+        print(f"\nEpoch {epoch:3d}  lr {lr:.2e}" +
+              (f"  ema {momentum:.4f}" if args.model == "jepa" else ""))
 
         train = run_epoch(model, train_loader, args.model, optimizer, momentum, augment=args.augment)
-        val = run_epoch(model, val_loader, args.model)
+        val   = run_epoch(model, val_loader,   args.model)
 
         summary = f"=> train {train['loss']:.4f}  val {val['loss']:.4f}"
         if args.model == "jepa":
@@ -224,25 +255,25 @@ def main(args):
             history["train_aux"].append(train["aux"])
             history["val_aux"].append(val["aux"])
 
-        with open(f"logs/{args.model}/history.json", "w") as f:
+        with open(f"logs/{run_name}/history.json", "w") as f:
             json.dump(history, f, indent=4)
 
-        save_plots(history, args.model)
+        save_plots(history, run_name)
 
         state = {
-            "epoch": epoch,
-            "model": model.state_dict(),
+            "epoch":     epoch,
+            "model":     model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "best_loss": best_loss,
-            "history": history,
+            "history":   history,
         }
 
-        torch.save(state, f"checkpoints/{args.model}/last.pt")
+        torch.save(state, f"checkpoints/{run_name}/last.pt")
 
         if val["loss"] < best_loss:
             best_loss = val["loss"]
             state["best_loss"] = best_loss
-            torch.save(state, f"checkpoints/{args.model}/best.pt")
+            torch.save(state, f"checkpoints/{run_name}/best.pt")
             print(f"  ** Best saved ({best_loss:.4f})")
 
     print(f"\nDone. Best val_loss: {best_loss:.4f}")
@@ -250,16 +281,16 @@ def main(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--model", type=str, default="mae", choices=["mae", "mae_sota", "jepa"])
-    p.add_argument("--data_dir", type=str, default="./data")
-    p.add_argument("--batch_size", type=int, default=2048)
-    p.add_argument("--num_workers", type=int, default=32)
-    p.add_argument("--prefetch_factor", type=int, default=1)
-    p.add_argument("--epochs", type=int, default=200)
-    p.add_argument("--warmup_epochs", type=int, default=10)
-    p.add_argument("--lr", type=float, default=3e-4)
-    p.add_argument("--weight_decay", type=float, default=0.05)
-    p.add_argument("--resume", type=str, default=None)
-    p.add_argument("--augment", action="store_true", default=False)
-    args = p.parse_args()
-    main(args)
+    p.add_argument("--model",           type=str,   default="mae",
+                   choices=["mae", "mae_sota", "jepa"])
+    p.add_argument("--data_dir",        type=str,   default="./data")
+    p.add_argument("--batch_size",      type=int,   default=1024)
+    p.add_argument("--num_workers",     type=int,   default=64)
+    p.add_argument("--prefetch_factor", type=int,   default=1)
+    p.add_argument("--epochs",          type=int,   default=200)
+    p.add_argument("--warmup_epochs",   type=int,   default=10)
+    p.add_argument("--lr",              type=float, default=3e-4)
+    p.add_argument("--weight_decay",    type=float, default=0.05)
+    p.add_argument("--resume",          type=str,   default=None)
+    p.add_argument("--augment",         action="store_true", default=False)
+    main(p.parse_args())
