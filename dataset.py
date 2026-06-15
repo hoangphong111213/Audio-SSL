@@ -3,7 +3,7 @@ import random
 import torch
 from torch.utils.data import Dataset
 from torchaudio.datasets import SPEECHCOMMANDS, LIBRISPEECH
-
+import json
 
 def _crop_or_pad(waveform, target, training):
     n = waveform.shape[1]
@@ -46,18 +46,34 @@ class GSCv2Dataset(Dataset):
         waveform = _crop_or_pad(waveform, self.target_length, self.is_training)
         return waveform, self.label_map[label_str]
 
-
 class CachedMelDataset(Dataset):
     def __init__(self, cache_dir):
-        self.paths = sorted(
-            [os.path.join(cache_dir, f) for f in os.listdir(cache_dir) if f.endswith(".pt")]
-        )
+        single_file = os.path.join(cache_dir, "gsc.pt")
+
+        if os.path.exists(single_file):
+            data = torch.load(single_file, weights_only=True)
+            self.mels = data["mels"]
+            self.labels = data["labels"]
+            self.paths = None
+        else:
+            self.paths = sorted(
+                [os.path.join(cache_dir, f) for f in os.listdir(cache_dir) if f.endswith(".pt")]
+            )
+            self.mels = None
+            self.labels = None
+        
+        classes_file = os.path.join(cache_dir, "classes.json")
+        if os.path.exists(classes_file):
+            with open(classes_file) as f:
+                self.classes = json.load(f)
 
     def __len__(self):
-        return len(self.paths)
+        return len(self.mels) if self.mels is not None else len(self.paths)
 
     def __getitem__(self, idx):
+        if self.mels is not None:
+            return self.mels[idx].float(), self.labels[idx].item()
         data = torch.load(self.paths[idx], weights_only=True)
         if isinstance(data, dict):
             return data["mel"].float(), data["label"]
-        return data.float(), 0 
+        return data.float(), 0

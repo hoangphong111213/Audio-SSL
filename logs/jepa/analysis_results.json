@@ -1,0 +1,263 @@
+{
+    "config": {
+        "model": "jepa",
+        "data_dir": "./data",
+        "batch_size": 128
+    },
+    "top_5_classes": [
+        {
+            "name": "six",
+            "accuracy": 0.8601036269430051
+        },
+        {
+            "name": "yes",
+            "accuracy": 0.8318496538081108
+        },
+        {
+            "name": "eight",
+            "accuracy": 0.8220227092685503
+        },
+        {
+            "name": "house",
+            "accuracy": 0.8192143871273071
+        },
+        {
+            "name": "zero",
+            "accuracy": 0.81071076011846
+        }
+    ],
+    "worst_5_classes": [
+        {
+            "name": "learn",
+            "accuracy": 0.5504761904761905
+        },
+        {
+            "name": "tree",
+            "accuracy": 0.5542922114837976
+        },
+        {
+            "name": "dog",
+            "accuracy": 0.556390977443609
+        },
+        {
+            "name": "forward",
+            "accuracy": 0.5741811175337187
+        },
+        {
+            "name": "go",
+            "accuracy": 0.5917525773195876
+        }
+    ],
+    "all_class_statistics": {
+        "backward": {
+            "class_id": 0,
+            "correct": 1250,
+            "total": 1664,
+            "accuracy": 0.7512019230769231
+        },
+        "bed": {
+            "class_id": 1,
+            "correct": 1235,
+            "total": 2014,
+            "accuracy": 0.6132075471698113
+        },
+        "bird": {
+            "class_id": 2,
+            "correct": 1487,
+            "total": 2064,
+            "accuracy": 0.7204457364341085
+        },
+        "cat": {
+            "class_id": 3,
+            "correct": 1428,
+            "total": 2031,
+            "accuracy": 0.7031019202363368
+        },
+        "dog": {
+            "class_id": 4,
+            "correct": 1184,
+            "total": 2128,
+            "accuracy": 0.556390977443609
+        },
+        "down": {
+            "class_id": 5,
+            "correct": 2677,
+            "total": 3917,
+            "accuracy": 0.6834311973449069
+        },
+        "eight": {
+            "class_id": 6,
+            "correct": 3113,
+            "total": 3787,
+            "accuracy": 0.8220227092685503
+        },
+        "five": {
+            "class_id": 7,
+            "correct": 2850,
+            "total": 4052,
+            "accuracy": 0.7033563672260612
+        },
+        "follow": {
+            "class_id": 8,
+            "correct": 963,
+            "total": 1579,
+            "accuracy": 0.609879670677644
+        },
+        "forward": {
+            "class_id": 9,
+            "correct": 894,
+            "total": 1557,
+            "accuracy": 0.5741811175337187
+        },
+        "four": {
+            "class_id": 10,
+            "correct": 2738,
+            "total": 3728,
+            "accuracy": 0.7344420600858369
+        },
+        "go": {
+            "class_id": 11,
+            "correct": 2296,
+            "total": 3880,
+            "accuracy": 0.5917525773195876
+        },
+        "happy": {
+            "class_id": 12,
+            "correct": 1366,
+            "total": 2054,
+            "accuracy": 0.6650438169425511
+        },
+        "house": {
+            "class_id": 13,
+            "correct": 1731,
+            "total": 2113,
+            "accuracy": 0.8192143871273071
+        },
+        "learn": {
+            "class_id": 14,
+            "correct": 867,
+            "total": 1575,
+            "accuracy": 0.5504761904761905
+        },
+        "left": {
+            "class_id": 15,
+            "correct": 2722,
+            "total": 3801,
+            "accuracy": 0.7161273349118653
+        },
+        "marvin": {
+            "class_id": 16,
+            "correct": 1309,
+            "total": 2100,
+            "accuracy": 0.6233333333333333
+        },
+        "nine": {
+            "class_id": 17,
+            "correct": 2807,
+            "total": 3934,
+            "accuracy": 0.7135231316725978
+        },
+        "no": {
+            "class_id": 18,
+            "correct": 2519,
+            "total": 3941,
+            "accuracy": 0.639177873636133
+        },
+        "off": {
+            "class_id": 19,
+            "correct": 2767,
+            "total": 3745,
+            "accuracy": 0.7388518024032042
+        },
+        "on": {
+            "class_id": 20,
+            "correct": 2504,
+            "total": 3845,
+            "accuracy": 0.6512353706111833
+        },
+        "one": {
+            "class_id": 21,
+            "correct": 2894,
+            "total": 3890,
+            "accuracy": 0.7439588688946015
+        },
+        "right": {
+            "class_id": 22,
+            "correct": 2931,
+            "total": 3778,
+            "accuracy": 0.7758073054526204
+        },
+        "seven": {
+            "class_id": 23,
+            "correct": 3031,
+            "total": 3998,
+            "accuracy": 0.7581290645322661
+        },
+        "sheila": {
+            "class_id": 24,
+            "correct": 1550,
+            "total": 2022,
+            "accuracy": 0.7665677546983185
+        },
+        "six": {
+            "class_id": 25,
+            "correct": 3320,
+            "total": 3860,
+            "accuracy": 0.8601036269430051
+        },
+        "stop": {
+            "class_id": 26,
+            "correct": 3119,
+            "total": 3872,
+            "accuracy": 0.8055268595041323
+        },
+        "three": {
+            "class_id": 27,
+            "correct": 2889,
+            "total": 3727,
+            "accuracy": 0.7751542795814328
+        },
+        "tree": {
+            "class_id": 28,
+            "correct": 975,
+            "total": 1759,
+            "accuracy": 0.5542922114837976
+        },
+        "two": {
+            "class_id": 29,
+            "correct": 2918,
+            "total": 3880,
+            "accuracy": 0.7520618556701031
+        },
+        "up": {
+            "class_id": 30,
+            "correct": 2821,
+            "total": 3723,
+            "accuracy": 0.7577222669889874
+        },
+        "visual": {
+            "class_id": 31,
+            "correct": 1082,
+            "total": 1592,
+            "accuracy": 0.6796482412060302
+        },
+        "wow": {
+            "class_id": 32,
+            "correct": 1406,
+            "total": 2123,
+            "accuracy": 0.6622703721149317
+        },
+        "yes": {
+            "class_id": 33,
+            "correct": 3364,
+            "total": 4044,
+            "accuracy": 0.8318496538081108
+        },
+        "zero": {
+            "class_id": 34,
+            "correct": 3285,
+            "total": 4052,
+            "accuracy": 0.81071076011846
+        }
+    }
+}

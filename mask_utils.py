@@ -22,8 +22,8 @@ class MaskingUtility:
         return mask, ids_keep, ids_restore
 
     def generate_jepa_block_mask(self, x, grid_h, grid_w,
-                                 min_t=4, max_t=8, min_f=2, max_f=4,
-                                 n_target_blocks=4, context_mask_ratio=0.15):
+                                 min_t=2, max_t=4, min_f=1, max_f=2,
+                                 n_target_blocks=2, context_mask_ratio=0.1):
         B, N, _ = x.shape
         device = x.device
         F, T = grid_h, grid_w

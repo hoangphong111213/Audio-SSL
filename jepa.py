@@ -68,8 +68,9 @@ class AudioJEPA(nn.Module):
 
         x_ctx = self.context_encoder.patch_embed(x).flatten(2).transpose(1, 2) + pos_embed
 
-        ids_keep, ids_restore, target_ids = self.masker.generate_jepa_block_mask(
-            x_ctx, grid_h=grid_F, grid_w=grid_T
+        ids_keep, ids_restore, target_ids = self.masker.generate_jepa_random_mask(
+            x_ctx,
+            mask_ratio=0.6,
         )
 
         context_feats = self._encode(self.context_encoder,

@@ -3,18 +3,24 @@ name = "audio-ssl"
 version = "0.1.0"
 description = "Audio SSL representation learning comparison"
 readme = "README.md"
-requires-python = ">=3.10,<3.12"
+requires-python = ">=3.11,<3.12"
 
 dependencies = [
-    "torch",
-    "torchvision",
-    "torchaudio",
+    "torch==2.4.0",
+    "torchvision==0.19.0",
+    "torchaudio==2.4.0",
+    "soundfile",
     "matplotlib>=3.7.0",
     "numpy>=1.24.0",
-    "transformers>=4.30.0",
+    "transformers>=4.30.0,<4.50.0",
     "scikit-learn>=1.2.0",
-    "seaborn>=0.12.0"
+    "seaborn>=0.12.0",
+    "openTSNE>=1.0.0",
 ]
+
+[tool.uv]
+prerelease = "allow"
+index-strategy = "unsafe-best-match"
 
 [[tool.uv.index]]
 name = "pytorch-cu124"
@@ -24,8 +30,3 @@ default = true
 [[tool.uv.index]]
 name = "tsinghua"
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["audio_ssl*"]
-exclude = ["logs*", "data*", "checkpoints*"]
